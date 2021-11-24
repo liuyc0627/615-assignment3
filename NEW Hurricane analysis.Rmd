@@ -1,0 +1,170 @@
+---
+title: "Tracking Hurricane Katrina movement"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+r = getOption("repos")
+r["CRAN"] = "http://cran.us.r-project.org"
+options(repos = r)
+if (!require("pacman")) install.packages("pacman",repos = "http://cran.us.r-project.org")
+pacman::p_load("tidyverse","dplyr","stringr","fuzzyjoin","data.table","zoo",
+              "drat","ggplot2","gridExtra","ncdf4","parsedate","rerddap","sp","httr",
+              "lubridate","gridGraphics",  "mapdata",
+             "cmocean","RColorBrewer", "grid", "PBSmapping","oce", "ocedata", 
+              "kableExtra", "cowplot","ggrepel","sf","ggspatial",
+              "rnaturalearth", "rnaturalearthdata","maps","gstat")
+addRepo("geanders")
+install.packages("hurricaneexposuredata", dependencies = TRUE, INSTALL_opts = '--no-lock')
+install.packages('hurricaneexposure')
+library(hurricaneexposure)
+library(hurricaneexposuredata)
+library(tidyverse)
+library(drat)
+library(rerddap)
+install.packages('weathermetrics')
+library(weathermetrics)
+library(gstat)
+library(sp)
+library(sf)
+library(rgdal)
+data("hurr_tracks")
+head(hurr_tracks)
+library(ggplot2)
+library(cmocean)
+library(mapdata)
+library(gridGraphics)
+library(lubridate)
+library(httr)
+library(sp)
+library(parsedate)
+library(ncdf4)
+```
+
+
+## Introduction 
+
+Using Hurricaneexposure package makes it possible to understand the how the destructive hurricanes make the movement from the landfall points as it moves inland. There were two purpose of this report, first is to verify if hurricaneexposure package's trace of hurricanes reflect the buoy observation of natural movement, such as wind and wave when hurrianes moved. We specifically zoomed in to Hurricane Katrina, which is a large destructive hurriacane hit the Gulf of Mexico States, especially Lousiana, south Florida, Alabama, Missisippi and other states on the trace. Hurricaneexposure package is utilized to present the trace of the hurricane, then detailed buoy data information during Hurricane Katrina is used to compre with Hurricaneexposure packages. The next purpose of this report is to use variomgraph to describe the spatial wind speed with hurricanes.
+
+
+### From Hurricaneexposure package: How did Hurricane Katrina moved? 
+
+Hurricane Katrina is a large Category 5 Atlantic hurricane which  causing over 1800 fatalities and $125 billion. With hurricaneexposure package data, the hurricane movement track was able to be track and ploted and show the counties impacted by the hurriance while the hurricane moves inland. From Figure1, the approach points of Hurricane Katrina is shown as below. Hurricane Katrina first moved northwestern bound, landed at south point of Florida. Next, it moved southwestern bound to Gulf of Mexico, 
+```{r map1, fig.cap="Figure1", echo=TRUE, message = FALSE, warning=FALSE}
+map_tracks(storm = "Katrina-2005", padding = , plot_points = TRUE, alpha = 1, color = "firebrick") + 
+  labs(title="Hurricane Katrina Movement Track", tag = "Figure.1") 
+  
+```
+Because Hurricane Katrina is the a Category 5 hurricane, the winds could reach above 155 mph. Figure2 shows the exposed areas within 400 km distance of Hurricane Katrina. As Hurricane Katrina moved from south to the north, the states move from southwest to northeast are all exposed to different degrees. 
+```{r map2, fig.cap="Figure2", echo=TRUE, message = FALSE, warning=FALSE}
+map_distance_exposure(storm = "Katrina-2005", dist_limit = 400, add_track = TRUE)+
+  labs(title = "Hurricane Katrina exposure areas within 400 km distance", 
+       tag = "Figure2.")
+```
+The Hurricaneexposure package also provided data on rainfall and maximum wind on the trace of the hurricane's move. Figure3 presents total rainfalls along the hurricane trace and the maximum Wind speed. From the railfall figure, the Hurricane Katrian landfall from Lousiana, then move up to northeast states, whilte Mississippi has the most rainfalls among states impacted by the hurricane. According to the Maximum wind map, the landfall points, including south Florida, Louisiana, and Mississippi are impacted the most by the strong wind. The wind weakened as soon as the hurricane made the landfall and moved to inland areas. 
+
+```{r map3, fig.cap="Figure3", echo=TRUE, message = FALSE, warning=FALSE}
+p1<- map_counties(storm = "Katrina-2005", metric = "rainfall") + 
+  ggtitle("Total Rainfall")
+
+p2 <- map_counties(storm = "Katrina-2005", metric = "wind") + 
+  ggtitle("Maximum Wind")
+
+library(gridExtra)
+grid.arrange(p1, p2,  top = grid::textGrob("Figure3. Hurricane Katrina Rainfall and Wind Exposure"))
+```
+Because hurricane Katrina is the only hurricane will be studied in this report, table 1 is produced to present the geographical range of Hurricane Katrina and the time range. 
+
+From table1, the Hurricane Katrina started to on August 23, 2005, and records ended on August 31, 2005. 
+
+According to table1, the longitutde range for Hurricane Katrina from hurricaneexposure package moved from west to east, around 75.1W to 82.9W. For latitude, Hurricane Katrina moved from south to north, around 23.1N to 40.1N. Therefore, the buoys that the research is interested will be in around this coordinates range, which will be discussed in next section. 
+```{r table1, tbl.cap="Table1",message = FALSE, warning=FALSE}
+library(dplyr)
+install.packages('kableExtra')
+library(kableExtra)
+katrina.table <-hurr_tracks %>%
+  filter(storm_id=="Katrina-2005") %>%
+  select(c(1:5)) %>%
+  kbl(caption = "Table1. Hurricane Katrina Movement Table") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+katrina.table
+
+```
+
+
+#### what are the buoys around the landfall points? 
+From Section 1, the longitude and latitude range of the Hurricane Katrina was shown as (23.1N - 40.1N, 75.1W - 89.1W). By monitoring the observations on the wind and rainfall activities, the landfall of the hurricane could be identified. To achieve it, nearby buoys need to be identified first. 
+
+National Oceanic and Atmospheric Administration (NOAA, https://www.noaa.gov) provides detailed inforamtion on buoyds coordinates and historical data from buoys. However, the shortness of NOAA webpage is that individual buoy could only be identified from the map coordinates. Therefore, rerddap package is utilized to access NOAA database to find all the available buoys during the Hurricane Katrina. 
+
+The coordinate range is set to the the first day's coordinates (Aug 23 2005) to the first day when the wind speed reach 100 mph according to table 1. Therefore, the coordinate range is (23N - 31N, 75W - 90W). 
+
+In Figure4., the buoys within the range were plotted along the coastal line around the coast. 
+
+```{r buoy loc, cache=TRUE, echo=F, warning=F, include=FALSE}
+source("buoy_location_graph.R", echo = T, spaced = F)
+```
+To have a better understanding of the locations of buoys near the Landfall, table 2 was built. There are 77 buoys around the landfall points of Hurricane Katrina. Table 2 showed the station number of all 77 buoys, along with the longitude and latitude. With table 2, a list of stations could be constructed to extract additional data from NOAA website. 
+```{r table2,echo=TRUE, message = FALSE, warning=FALSE}
+buoys.table <- unique(buoys.df[c("station", "longitude", "latitude")],row.names=F) 
+row.names(buoys.table) <-NULL
+buoys.table <-buoys.table %>%
+  kbl(caption = "Table2. List of buoys on Hurricane Katrina's Moving Track") %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+
+buoys.table
+```
+Additional data information for 77 buoys in the table above were requested from NOAA website, specifically average wind speed, gust speed, significant wave height, and water level. 
+
+The data is focused to the hurricane time window, which is between August 23, 2005 - August 31, 2005. To track the daily change over the 9 days during the hurricane, aggregated mean for wind speed, gust speed, significant wave height, and water level were calculated. 
+```{r buoydata cleaning, cache=F, echo=F, warning=FALSE, message=FALSE, include = FALSE}
+source("noaa_buoydataimport.R", echo = T, spaced = F)
+```
+As the wind speed increased as the hurricane grew, wind speed could be used as an indicator to measure the landfall of the hurricane. In Figure5a-5i, 9 days' map on wind speed among the 77 buoys were presented. As the blue color getting lighter, the wind speed increased. From Figure5a to Figure 5i, buoys that recorded stronger wind speed gradually moved from southwest toward northeast, which roughly matched the hurricane trace from Hurricaneexposure package. The disadvantage of this graph is that the changes and move is not ovbious, this could be cause by the reason for aggregating at daily level, which might ommitting the changes. 
+```{r buoydata maps, cache=TRUE, echo=F, warning=F, message = FALSE}
+source("buoy_maps.R", echo = T, spaced = T)
+```
+To further understand if the buoys identified based on Hurricaneexposure package are the landfall points for the Hurricane Katrina, change of wave height and water level among the 9 days were plotted. From Figure6, wave height decreased significantly from August 29, which indicates as the hurricane moved inland, the wave height and landfall points decreased. Also, from Figure6, water level increased after August 29, 2005, as the hurricane moved inland, leaving large amount of rainfalls which increased the water level. Therefore, the landfall points are consistent. 
+```{r line graph, cache=TRUE, echo=T, warning=F}
+buoydata_agg2 <- buoydt_agg %>%
+  aggregate(., by = list(.$Group.2),FUN = mean)%>%
+  select(c("Group.1","WVHT","TIDE")) %>%
+  merge(x=., y = buoys.loc, by.x = 'Group.1', by.y = 'station', all.x=TRUE)
+
+buoydata_agg2$YR = 2005
+buoydata_agg2$MM = 08
+buoydata_agg2$date <- as.Date(with(buoydata_agg2, paste(YR, MM, Group.1,sep="-")), "%Y-%m-%d")
+lg <- ggplot(data=buoydata_agg2, aes(x=date)) +
+  geom_line(aes(y = WVHT), color = "darkred")+
+  geom_line(aes(y = TIDE), color="steelblue", linetype="twodash")+
+  theme_bw()+
+  scale_y_continuous(name = 'Wave Height (Meter)',
+                     sec.axis = sec_axis(~./2, name = 'Water level (Feet)'))+
+  labs(x="Date", 
+       title="Average significant wave height (meters) and Water level",
+       subtitle="Among buoys around Hurricane Katrina moving track",
+       tag = "Figure6.")+
+  theme(plot.title=element_text(size=16, hjust=0.5, face="bold", colour="black", vjust=0))+
+  theme(plot.subtitle=element_text(size=14, hjust=0.5, color="black"))
+lg
+```
+
+
+## Variogram 
+To further understand the spatial relation and conduct further spatial analysis, a variogram study was carried out, focusing on average wind speed. 
+
+Figure7 is a simple display with exploratory checks patterns, trneds in the coordinates, and distribution of wind speed data. The middle left scatter plot shows data at the location of the data. 
+
+Figure8 further check the coordinates. 
+
+Figure 9 plotted bubble chart for wind speed. 
+
+Default options except for the argument setting the maximum distance (max.dist) to be considered between pairs of points were used for computing the empirical variogram. However, according to Figure 10, we found there are strong autocorrelation and the model fit is not ideal. 
+```{r variogram, cache=F, echo=F, warning=FALSE, message=FALSE}
+source("variogram.R", echo = T, spaced = T)
+```
+
